@@ -5,7 +5,7 @@
 
 ![img.png](image/img.png)
 
-처음에는 단순히 코드로직에 오류가 있어서 해당 상황이 발생했다고 생각했다. 하지만 예상과는 달리 쉽게 원인을 찾을 수가 없었다.
+처음에는 코드로직의 오류로 인해 해당 상황이 발생했다고 생각했다. 하지만 코드로직에서는 원인을 찾을 수 없었다.
 현재 User를 관리하는 클래스인 InMemoryUserRepository는 아래와 같이 구성되어 있다.
 ```
 public class InMemoryUserRepository {
@@ -28,7 +28,7 @@ public class InMemoryUserRepository {
    private InMemoryUserRepository() {}
 }
 ```
-여기서 database를 public으로 만들어 외부에서 접근 가능하도록 한 뒤 해당 회원가입을 했을 때와 로그인을 했을 때 database에 어떤 User가 저장되어 있는지 출력하도록 했다.
+여기서 database를 public으로 만들어 외부에서 접근 가능하도록 수정한 뒤 해당 회원가입을 했을 때와 로그인을 했을 때 database에 어떤 User가 저장되어 있는지 출력하도록 했다.
 ```
 @RequestMapping(value = "/register", method = RequestMethod.POST)
    public ModelAndView save(HttpServletRequest req, HttpServletResponse res) {
@@ -66,11 +66,12 @@ public class InMemoryUserRepository {
                .orElse("redirect:/401.jsp");
    }
 ```
-그랬더니 이상한 결과가 출력되었다.
+그 결과 이상한 결과가 출력되었다.
 
 ![img.png](image/img1.png)
 
-분명 RegisterController에서 사용하는 InMemoryUserRepository에는 계속 User가 저장되고 있는데 LoginController에서 사용하는 InMemoryUserRepository에는 맨 처음에 초기화 할 때 기본 데이터로 저장한 User밖에 없었다. 즉, 서로 다른 InMemoryUserRepository를 바라보고 있어서 제대로 동작하지 않았다. 그래서 해당 이유가 발생한 원인을 찾기 위해 몇몇 크루와 함께 계속 디버깅을 하다가 InMemoryUserRepository의 static 블럭에 넣었던 디버깅용 출력문이 로그인 할 때, 회원가입 할 때 각각 출력되는 현상을 발견했다.
+분명 RegisterController에서 사용하는 InMemoryUserRepository에는 계속 User가 저장되고 있는데 LoginController에서 사용하는 InMemoryUserRepository에는 맨 처음에 초기화 할 때 기본 데이터로 저장한 User밖에 없었다. 즉, 서로 다른 InMemoryUserRepository를 사용하고 있기 때문에 동작하지 않았던 것이다. 
+해당 이유가 발생한 원인을 찾기 위해 몇몇 크루와 함께 계속 디버깅을 하던 중 InMemoryUserRepository의 static 블럭에 넣었던 디버깅용 출력문이 로그인 할 때, 회원가입 할 때 각각 출력되는 현상을 발견했다.
 ```
 static {
     System.out.println("InMemoryUserRepository static block start");
@@ -80,7 +81,7 @@ static {
 ```
 ![img_3.png](image/img_3.png)
 
-왜 그런지 더 디버깅을 하다보니 RegisterController와 LoginController의 ClassLoader가 다르다는 사실을 알게 되었고, ClassLoader를 파헤치는 계기가 되었다.
+이후 추가로 디버깅을 하다보니 RegisterController와 LoginController의 ClassLoader가 다르다는 사실을 알게 되었고, ClassLoader를 파헤치는 계기가 되었다.
 ```
 @RequestMapping(value = "/register", method = RequestMethod.POST)
     public ModelAndView save(HttpServletRequest req, HttpServletResponse res) {
@@ -222,9 +223,9 @@ public void initialize() {
        log.info("Initialized AnnotationHandlerMapping!");
    }
 ```
-즉, ManualHandlerMapping에서는 new를 통해서 생성하고 AnnotationHandlerMapping에서는 Reflections를 통해 HandlerMapping을 생성하고 있다.
+ManualHandlerMapping에서는 new를 통해서 HandlerMapping을 생성하고 AnnotationHandlerMapping에서는 Reflections를 통해서 HandlerMapping을 생성하고 있다.
 이때 문제는 `DispatcherServlet`은 `WebApplicationInitializer`의 구현체인 `DispatcherServletInitializer`에서 만들고 있고 `WebApplicationInitializer`의 구현체는 Application에서 호출하는 게 아닌 자동으로 런타임에 실행된다. 이때 DispatcherServlet의 Thread의 ContextClassLoader가 ApplicationClassLoader가 아닌 Apache Tomcat의 클래스 로더 중 하나인 ParallelWebappClassLoader설정된다는 것이다.
-이것이 문제되는 이유는 new로 클래스를 만들때는 Thread의 ContextClassLoader가 영향을 미치지 않지만 Reflections를 사용할 때는 Thread의 ContextClassLoader가 영향을 미친다는 것이다.
+이것이 문제되는 이유는 new로 클래스를 만들때는 Thread의 ContextClassLoader가 영향을 미치지 않지만 Reflections를 사용할 때는 Thread의 ContextClassLoader가 영향을 미치기 때문이다.
 Reflections의 생성자로 들어가보면
 ```
 public Reflections(Object... params) {
@@ -300,7 +301,7 @@ default Class<?> forClass(String typeName, ClassLoader... loaders) {
    }
 }
 ```
-중요한 부분은 아래의 `ClasspathHelper.classLoaders(loaders)`를 도는 반복문이다. 여기서 ClassLoader를 통해 클래스를 로드하고 있다. 여기서 type.contains(“[“)는 타입이 배열인지 여부를 확인하는 것이다. 만약 배열이면 type에 “[“이 포함된 상태로 넘어오게 된다. 지금 HanderMapping은 배열이 아니므로 `classLoader.loadClass(type)`이 실행될 것이다. 만약 여기서 주어진 ClassLoader가 해당 클래스를 로드할 수 없으면 try-catch문에 의해 다음 ClassLoder로 넘어가게 된다. 그러면은 ClassLoder의 배열에는 어떤 ClassLoader가 넘어오게 되는지 확인해보자.
+중요한 부분은 아래의 `ClasspathHelper.classLoaders(loaders)`를 도는 반복문이다. 여기서 ClassLoader를 통해 클래스를 로드하고 있다. 여기서 type.contains(“[“)는 타입이 배열인지 여부를 확인하는 로직이다. 만약 배열이면 type에 “[“이 포함된 상태로 넘어오게 된다. 지금 HanderMapping은 배열이 아니므로 `classLoader.loadClass(type)`이 실행될 것이다. 만약 여기서 주어진 ClassLoader가 해당 클래스를 로드할 수 없으면 try-catch문에 의해 다음 ClassLoder로 넘어가게 된다. 이제 ClassLoder의 배열에는 어떤 ClassLoader가 넘어오게 되는지 확인해보자.
 ```
 public static ClassLoader[] classLoaders(ClassLoader... classLoaders) {
    if (classLoaders != null && classLoaders.length != 0) {
@@ -338,6 +339,7 @@ System.out.println(Arrays.toString(contextClassLoader.getDefinedPackages()));
 ![img_2.png](image/img_2.png)
 
 확인해보면 com.techcourse.controller에 있는 클래스들을 로드할 수 있다. 이때 RegisterController는 com.techcourse.controller에 위치해 있어 ParallelWebappClassLoader로 로드가 가능하다. 따라서 RegisterController는 ParallelWebappClassLoader에 의해 로드되고 다른 Controller들은 ApplicationClassLoader에 의해 로드된다.
-각각의 ClassLoader는 자신의 클래스 공간에 클래스를 로드하고 이는 서로 다른 메모리 공간을 사용한다. 따라서 아무리 static 필드라고 하더라도 공유할 수 없다. 그렇기에 RegisterController의 InMemoryUserRepository와 LoginController의 InMemoryUserRepository가 달랐던 것이다.
+각각의 ClassLoader는 자신의 클래스 공간에 클래스를 로드하고 이는 서로 다른 메모리 공간을 사용한다. 따라서 static 필드라고 하더라도 서로 다른 클래스 로더 사이에서는 데이터를 공유할 수 없다. 그렇기에 RegisterController의 InMemoryUserRepository와 LoginController의 InMemoryUserRepository가 달랐던 것이다.
 
-그래서 HandlerManagementManager에서 Controller들을 전부 스캔해오도록 하여 ApplicationClassLoader로 로드되도록 수정하여 문제를 해결하거나 Thread.currentThread().setContextClassLoader를 통해 Thread의 ContextClassLoader를 설정하는 방법이 있는데 난 후자를 택해 문제를 해결할 수 있었다.
+위의 문제를 해결하기 위해선 HandlerManagementManager에서 Controller들을 전부 스캔해오도록 하여 ApplicationClassLoader로 로드되도록 수정하여 문제를 해결하거나 Thread.currentThread().setContextClassLoader를 통해 Thread의 ContextClassLoader를 설정하는 방법을 사용할 수 있다.
+난 후자를 택해 문제를 해결할 수 있었다.
