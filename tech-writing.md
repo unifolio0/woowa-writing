@@ -1,5 +1,5 @@
 ## 계기
-우아한 테크 코스 레벨 4의 2번째 미션인 @MVC 구현하기를 진행하던 중이었다. 빠르게 step2를 구현하고 리뷰 요청을 보냈는데 회원가입을 했는데 해당 계정으로 로그인이 안되는 오류가 있다는 리뷰를 받았다. 
+우아한 테크 코스 레벨 4의 2번째 미션인 @MVC 구현하기를 진행하던 중이었다. 빠르게 step2를 구현하고 리뷰 요청을 보냈다. 그런데 회원가입을 한 계정으로 로그인이 안되는 오류가 있다고 리뷰를 받았다. 
 
 [링크](https://github.com/woowacourse/java-mvc/pull/708#discussion_r1771351206)
 
@@ -28,7 +28,7 @@ public class InMemoryUserRepository {
    private InMemoryUserRepository() {}
 }
 ```
-여기서 database를 public으로 만들어 외부에서 접근 가능하도록 수정한 뒤 해당 회원가입을 했을 때와 로그인을 했을 때 database에 어떤 User가 저장되어 있는지 출력하도록 했다.
+여기서 database를 public으로 만들어 외부에서 접근 가능하도록 수정한 뒤 회원가입을 했을 때와 로그인을 했을 때 database에 어떤 User가 저장되어 있는지 출력시켰다.
 ```
 @RequestMapping(value = "/register", method = RequestMethod.POST)
    public ModelAndView save(HttpServletRequest req, HttpServletResponse res) {
@@ -71,7 +71,7 @@ public class InMemoryUserRepository {
 ![img.png](image/img1.png)
 
 분명 RegisterController에서 사용하는 InMemoryUserRepository에는 계속 User가 저장되고 있는데 LoginController에서 사용하는 InMemoryUserRepository에는 맨 처음에 초기화 할 때 기본 데이터로 저장한 User밖에 없었다. 즉, 서로 다른 InMemoryUserRepository를 사용하고 있기 때문에 동작하지 않았던 것이다. 
-해당 이유가 발생한 원인을 찾기 위해 몇몇 크루와 함께 계속 디버깅을 하던 중 InMemoryUserRepository의 static 블럭에 넣었던 디버깅용 출력문이 로그인 할 때, 회원가입 할 때 각각 출력되는 현상을 발견했다.
+위의 상황이 발생한 원인을 찾기 위해 몇몇 크루와 함께 계속 디버깅을 하던 중 InMemoryUserRepository의 static 블럭에 넣었던 디버깅용 출력문이 로그인 할 때, 회원가입 할 때 각각 출력되는 현상을 발견했다.
 ```
 static {
     System.out.println("InMemoryUserRepository static block start");
@@ -177,7 +177,7 @@ public class HandlerManagementManager {
    }
 }
 ```
-`HandlerManagementScanner.scanHandlerHelper`에서 반환하는 값은 List.of(HandleMapping.class, HandlerAdpter.class)이다. 즉, HandlerManagementManager는 전체 패키지에서 HandlerMapping과 HandlerAdapter 구현체를 스캔하여 싱글톤으로 관리하게 만든 클래스다. HandlerManagementScanner는 Reflections를 활용해 스캔하는 역할을 맡았은 클래스다.
+`HandlerManagementScanner.scanHandlerHelper`에서 반환하는 값은 List.of(HandleMapping.class, HandlerAdpter.class)이다. 즉, HandlerManagementManager는 전체 패키지에서 HandlerManagementScanner를 활용해 HandlerMapping과 HandlerAdapter 구현체를 싱글톤으로 관리하게 만든 클래스다. HandlerManagementScanner는 Reflections를 활용해 패키지의 클래스를 스캔한다.
 
 그 뒤 DispatcherServlet에서 HandlerMappings를 초기화 해준다.
 ```
@@ -225,19 +225,19 @@ public void initialize() {
 ```
 ManualHandlerMapping에서는 new를 통해서 HandlerMapping을 생성하고 AnnotationHandlerMapping에서는 Reflections를 통해서 HandlerMapping을 생성하고 있다.
 이때 문제는 `DispatcherServlet`은 `WebApplicationInitializer`의 구현체인 `DispatcherServletInitializer`에서 만들고 있고 `WebApplicationInitializer`의 구현체는 Application에서 호출하는 게 아닌 자동으로 런타임에 실행된다. 이때 DispatcherServlet의 Thread의 ContextClassLoader가 ApplicationClassLoader가 아닌 Apache Tomcat의 클래스 로더 중 하나인 ParallelWebappClassLoader설정된다는 것이다.
-이것이 문제되는 이유는 new로 클래스를 만들때는 Thread의 ContextClassLoader가 영향을 미치지 않지만 Reflections를 사용할 때는 Thread의 ContextClassLoader가 영향을 미치기 때문이다.
-Reflections의 생성자로 들어가보면
+이것이 문제되는 이유는 new 생성자로 클래스를 만들때는 Thread의 ContextClassLoader가 영향을 미치지 않지만 Reflections를 사용할 때는 Thread의 ContextClassLoader가 영향을 미치기 때문이다.
+Reflections의 생성자 내부 코드를 확인해보면 아래와 같다.
 ```
 public Reflections(Object... params) {
    this(ConfigurationBuilder.build(params));
 }
 ```
-로 되어 있다. 이때 `ConfigurationBuilder.build(params)`에서 ClassLoader를 설정해준다.
+이때 `ConfigurationBuilder.build(params)`에서 ClassLoader를 설정해준다.
 ```
 ClassLoader[] loaders = Stream.of(params).filter(p -> p instanceof ClassLoader).distinct().toArray(ClassLoader[]::new);
 if (loaders.length != 0) { builder.addClassLoaders(loaders); }
 ```
-이때 코드에서 Reflections의 생성자에 매개변수로 패키지 위치만 넣어주었기 때문에 ClassLoader가 들어있지 않아 따로 Reflections에서 사용할 ClassLoader를 설정하지 않는다.
+위의 코드에서 Reflections의 생성자에 매개변수로 패키지 위치만 넣어주었기 때문에 ClassLoader가 들어있지 않아 따로 Reflections에서 사용할 ClassLoader를 설정하지 않는다.
 
 이제 `getTypesAnnotatedWith`의 코드를 확인해 보자.
 ```
@@ -258,7 +258,7 @@ default <T> Collection<T> forNames(Collection<String> names, Class<T> resultType
    return names.stream().map(name -> forName(name, resultType, loaders)).filter(Objects::nonNull).collect(Collectors.toCollection(LinkedHashSet::new));
 }
 ```
-여기서 기억해야 할껀 resultType으로 넘어온 게 Class.class라는 사실이다. 이번엔 forName에 들어가보자.
+여기서 기억할 부분은 resultType으로 넘어온 게 Class.class라는 사실이다. 이번엔 forName에 들어가보자.
 ```
 default <T> T forName(String name, Class<T> resultType, ClassLoader... loaders) {
    return resultType.equals(Class.class) ? (T) forClass(name, loaders) :
@@ -268,7 +268,7 @@ default <T> T forName(String name, Class<T> resultType, ClassLoader... loaders) 
       resultType.equals(Member.class) ? (T) forMember(name, loaders) : null;
 }
 ```
-확인해보니 resultType에 따라서 특정 함수를 실행하는 것 같다. 여기서 resultType에는 Class.class가 들어왔으니 forClass함수가 실행될 것이다.
+확인해보니 resultType에 따라서 특정 함수를 실행하고 있다. 여기서 resultType에는 Class.class가 들어왔으니 forClass함수가 실행될 것이다.
 ```
 default Class<?> forClass(String typeName, ClassLoader... loaders) {
    if (primitiveNames.contains(typeName)) {
@@ -301,7 +301,7 @@ default Class<?> forClass(String typeName, ClassLoader... loaders) {
    }
 }
 ```
-중요한 부분은 아래의 `ClasspathHelper.classLoaders(loaders)`를 도는 반복문이다. 여기서 ClassLoader를 통해 클래스를 로드하고 있다. 여기서 type.contains(“[“)는 타입이 배열인지 여부를 확인하는 로직이다. 만약 배열이면 type에 “[“이 포함된 상태로 넘어오게 된다. 지금 HanderMapping은 배열이 아니므로 `classLoader.loadClass(type)`이 실행될 것이다. 만약 여기서 주어진 ClassLoader가 해당 클래스를 로드할 수 없으면 try-catch문에 의해 다음 ClassLoder로 넘어가게 된다. 이제 ClassLoder의 배열에는 어떤 ClassLoader가 넘어오게 되는지 확인해보자.
+중요한 부분은 아래의 `ClasspathHelper.classLoaders(loaders)`를 도는 반복문이다. 여기서 ClassLoader를 통해 클래스를 로드하고 있다. 여기서 type.contains(“[“)는 타입이 배열인지 여부를 확인하는 로직이다. 만약 배열이면 type에 “[“이 포함된 상태로 넘어오게 된다. 지금 HanderMapping은 배열이 아니므로 `classLoader.loadClass(type)`이 실행될 것이다. 만약 주어진 ClassLoader가 해당 클래스를 로드할 수 없으면 try-catch문에 의해 다음 ClassLoder로 넘어가게 된다. 이제 ClassLoder의 배열에는 어떤 ClassLoader가 넘어오게 되는지 확인해보자.
 ```
 public static ClassLoader[] classLoaders(ClassLoader... classLoaders) {
    if (classLoaders != null && classLoaders.length != 0) {
